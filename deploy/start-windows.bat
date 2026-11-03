@@ -9,7 +9,7 @@ cd /d "%~dp0.."
 echo [1/4] تنظیم متغیرهای محیطی...
 set PORT=8094
 set NODE_ENV=production
-set OLLAMA_BASE_URL=http://localhost:11434
+set OLLAMA_BASE_URL=http://127.0.0.1:11434
 set DEFAULT_MODEL=qwen3:8b
 set EMDAD_CACHE_TTL_HOURS=12
 rem مسیر دیتابیس - مسیر پروژه را بر اساس محل نصب اصلاح کنید

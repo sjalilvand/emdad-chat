@@ -11,7 +11,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         PORT: '8094',
-        OLLAMA_BASE_URL: 'http://localhost:11434',
+        OLLAMA_BASE_URL: 'http://127.0.0.1:11434',
         DEFAULT_MODEL: 'qwen3:8b',
         EMDAD_CACHE_TTL_HOURS: '12',
       },
