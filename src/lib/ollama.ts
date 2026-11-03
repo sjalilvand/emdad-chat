@@ -21,6 +21,9 @@ export interface ChatChunk {
 
 const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const REQUEST_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 600000);
+const THINK_ENABLED = process.env.OLLAMA_THINK !== '0';
+const NUM_PREDICT = Number(process.env.OLLAMA_NUM_PREDICT || 0);
+const KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE || '30m';
 
 /** زنجیره علت خطا را برای عیب‌یابی برمی‌گرداند (مثلاً ECONNRESET / ENOMEM / Timeout) */
 function describeError(e: unknown): string {
@@ -170,16 +173,18 @@ export async function* streamOllamaChat(
   messages: OllamaMessage[],
   options?: { temperature?: number }
 ): AsyncGenerator<ChatChunk> {
-  const body = {
+  const body: Record<string, unknown> = {
     model,
     messages,
     stream: true,
-    think: true,
+    keep_alive: KEEP_ALIVE,
     options: {
       temperature: options?.temperature ?? 0.7,
       num_ctx: Number(process.env.OLLAMA_NUM_CTX || 8192),
+      ...(NUM_PREDICT > 0 ? { num_predict: NUM_PREDICT } : {}),
     },
   };
+  if (THINK_ENABLED) body.think = true;
 
   let attempt: PostResult;
   try {

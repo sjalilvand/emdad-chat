@@ -9,6 +9,7 @@ export const dynamic = 'force-dynamic';
 export const maxDuration = 600;
 
 const KB_TTL_HOURS = Number(process.env.EMDAD_CACHE_TTL_HOURS || 12);
+const KB_TOP_K = Number(process.env.KB_TOP_K || 5);
 
 interface ChatRequestBody {
   conversationId?: string;
@@ -88,7 +89,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: 'متن پیام خالی است' }, { status: 400 });
   }
 
-  const model = body.model || process.env.DEFAULT_MODEL || 'qwen3:8b';
+  const model = body.model || process.env.DEFAULT_MODEL || 'qwen3:4b';
   const useWeb = body.webSearch === true;
   const useEmdad = body.emdadSearch !== false; // پیش‌فرض روشن
 
@@ -126,10 +127,10 @@ export async function POST(req: NextRequest) {
     // ۴) جستجوی پایگاه دانش امداد
     await loadEmdadCacheIfNeeded();
     const autoEmdad = isEmdadRelated(userMessage);
-    let kbHits = useEmdad ? searchKnowledgeBase(userMessage, 7, true) : [];
+    let kbHits = useEmdad ? searchKnowledgeBase(userMessage, KB_TOP_K, true) : [];
     if (kbHits.length === 0 && autoEmdad) {
       // حتی اگر امتیازدهی نتیجه نداد، سؤال امدادی است → بهترین قطعات اسناد محلی
-      kbHits = searchKnowledgeBase('کمیته امداد ' + userMessage, 5, true);
+      kbHits = searchKnowledgeBase('کمیته امداد ' + userMessage, KB_TOP_K, true);
     }
 
     // ۵) جستجوی وب
@@ -180,6 +181,7 @@ export async function POST(req: NextRequest) {
               sourceType: 'emdad-page',
               url: target.url,
               chunkIndex: 0,
+              score: 0,
               text: page.text.slice(0, 2400),
             });
           }
