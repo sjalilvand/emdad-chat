@@ -1,0 +1,40 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Conversation {
+  id        String    @id @default(cuid())
+  title     String    @default("گفتگوی جدید")
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  messages  Message[]
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String // user | assistant
+  content        String
+  thinking       String?
+  sources        String? // JSON array of {title,url,snippet}
+  model          String?
+  hasImage       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@index([conversationId, createdAt])
+}
+
+model KnowledgeDoc {
+  id        String   @id @default(cuid())
+  sourceKey String   @unique // e.g. shafaf | stats63700 | soha
+  title     String
+  url       String
+  content   String
+  fetchedAt DateTime @default(now())
+}
