@@ -6,8 +6,9 @@ param([int]$Port = 8094)
 
 $pm2 = Get-Command pm2 -ErrorAction SilentlyContinue
 if ($pm2) {
-  pm2 stop emdad-chat 2>$null | Out-Null
-  pm2 delete emdad-chat 2>$null | Out-Null
+  # با cmd اجرا می‌شود تا stderr در PS 5.1 خطای کاذب نسازد
+  cmd /c "pm2 stop emdad-chat >nul 2>&1"
+  cmd /c "pm2 delete emdad-chat >nul 2>&1"
 }
 
 try {

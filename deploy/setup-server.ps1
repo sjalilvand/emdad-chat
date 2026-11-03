@@ -125,9 +125,14 @@ if ($Foreground) {
   New-Item -ItemType Directory -Force -Path "logs" | Out-Null
   $pm2 = Get-Command pm2 -ErrorAction SilentlyContinue
   if ($pm2) {
-    pm2 delete emdad-chat 2>$null | Out-Null
+    # حذف نمونه قبلی در صورت وجود؛ در اجرای اول «not found» طبیعی است
+    # (با cmd اجرا می‌شود تا stderr به خطای توقف‌دهنده PS 5.1 تبدیل نشود)
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    cmd /c "pm2 delete emdad-chat >nul 2>&1"
+    $ErrorActionPreference = $prevEap
     pm2 start deploy/ecosystem.config.cjs
-    pm2 save | Out-Null
+    cmd /c "pm2 save >nul 2>&1"
     Ok "سرویس با PM2 اجرا شد (لاگ: pm2 logs emdad-chat)."
   } else {
     Start-Process -FilePath "node" `
