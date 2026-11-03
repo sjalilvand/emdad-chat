@@ -1,4 +1,10 @@
 // کلاینت Ollama با پشتیبانی استریم، تفکر (thinking) و تصویر
+// نکته فنی: برای استریم چت از node:http استفاده می‌شود (نه fetch)؛
+// چون fetch/undici سقف ۵ دقیقه‌ای برای هدر پاسخ دارد و در بارگذاری طولانی
+// مدل‌های بزرگ (مثل qwen3:8b روی سرور کم‌رم) باعث خطای کاذب «اتصال برقرار نشد» می‌شود.
+
+import http from 'http';
+import https from 'https';
 
 export interface OllamaMessage {
   role: 'system' | 'user' | 'assistant';
@@ -13,8 +19,29 @@ export interface ChatChunk {
   error?: string;
 }
 
-const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || 'http://localhost:11434').replace(/\/$/, '');
+const OLLAMA_BASE_URL = (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const REQUEST_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS || 600000);
+
+/** زنجیره علت خطا را برای عیب‌یابی برمی‌گرداند (مثلاً ECONNRESET / ENOMEM / Timeout) */
+function describeError(e: unknown): string {
+  const parts: string[] = [];
+  let cur: unknown = e;
+  let depth = 0;
+  while (cur && depth < 5) {
+    if (cur instanceof Error) {
+      const code = (cur as NodeJS.ErrnoException).code;
+      parts.push(code ? `${cur.message} [${code}]` : cur.message);
+      cur = (cur as Error & { cause?: unknown }).cause;
+    } else if (typeof cur === 'string') {
+      parts.push(cur);
+      break;
+    } else {
+      break;
+    }
+    depth++;
+  }
+  return parts.join(' ← ') || 'خطای ناشناخته';
+}
 
 export async function listModels(): Promise<{ ok: boolean; models: { name: string; size: number }[]; error?: string }> {
   try {
@@ -34,6 +61,102 @@ export async function listModels(): Promise<{ ok: boolean; models: { name: strin
       models: [],
       error: e instanceof Error ? e.message : 'اتصال به Ollama برقرار نشد',
     };
+  }
+}
+
+// ------------------------------------------------------------------
+// درخواست POST با node:http — بدون سقف هدر undici
+// req.setTimeout فقط «بی‌کاری سوکت» را می‌سنجد و با هر داده receiving ریست می‌شود
+// ------------------------------------------------------------------
+
+interface PostResult {
+  status: number;
+  res: http.IncomingMessage;
+}
+
+function postStream(urlStr: string, payload: string, timeoutMs: number): Promise<PostResult> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(urlStr);
+    const mod = u.protocol === 'https:' ? https : http;
+    const req = mod.request(
+      {
+        hostname: u.hostname,
+        port: u.port || (u.protocol === 'https:' ? 443 : 80),
+        path: `${u.pathname}${u.search}`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      },
+      (res) => resolve({ status: res.statusCode || 0, res })
+    );
+    req.setTimeout(timeoutMs, () => {
+      req.destroy(
+        Object.assign(new Error(`مهلت درخواست به Ollama تمام شد (${Math.round(timeoutMs / 1000)} ثانیه)`), {
+          code: 'OLLAMA_TIMEOUT',
+        })
+      );
+    });
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
+
+function readAll(res: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    res.setEncoding('utf-8');
+    res.on('data', (c: string) => {
+      data += c;
+    });
+    res.on('end', () => resolve(data));
+    res.on('error', reject);
+  });
+}
+
+/** تبدیل پاسخ NDJSON ورودی به خط‌های JSON */
+async function* ndjsonLines(res: http.IncomingMessage): AsyncGenerator<string> {
+  const queue: (string | null)[] = [];
+  let notify: (() => void) | null = null;
+  let failed: unknown = null;
+  res.setEncoding('utf-8');
+  const push = (item: string | null) => {
+    queue.push(item);
+    if (notify) {
+      const n = notify;
+      notify = null;
+      n();
+    }
+  };
+  res.on('data', (c: string) => push(c));
+  res.on('end', () => push(null));
+  res.on('error', (err: Error) => {
+    failed = err;
+    push(null);
+  });
+
+  let buffer = '';
+  for (;;) {
+    if (queue.length === 0) {
+      await new Promise<void>((r) => {
+        notify = r;
+      });
+      continue;
+    }
+    const item = queue.shift()!;
+    if (item === null) {
+      if (buffer.trim()) yield buffer;
+      if (failed) throw failed;
+      return;
+    }
+    buffer += item;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      const t = line.trim();
+      if (t) yield t;
+    }
   }
 }
 
@@ -58,40 +181,36 @@ export async function* streamOllamaChat(
     },
   };
 
-  let res: Response | null = null;
+  let attempt: PostResult;
   try {
-    res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
+    attempt = await postStream(`${OLLAMA_BASE_URL}/api/chat`, JSON.stringify(body), REQUEST_TIMEOUT_MS);
     // اگر نسخه Ollama پارامتر think را نمی‌شناسد یا مدل از تفکر پشتیبانی نمی‌کند
-    if (res.status === 400) {
-      res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, think: undefined }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
+    if (attempt.status === 400) {
+      const { think: _think, ...rest } = body as typeof body & Record<string, unknown>;
+      attempt = await postStream(`${OLLAMA_BASE_URL}/api/chat`, JSON.stringify(rest), REQUEST_TIMEOUT_MS);
     }
   } catch (e) {
-    yield { error: `اتصال به Ollama (${OLLAMA_BASE_URL}) برقرار نشد. آیا سرویس Ollama در حال اجراست؟` };
+    const detail = describeError(e);
+    yield {
+      error:
+        `ارتباط با Ollama (${OLLAMA_BASE_URL}) برقرار نشد ← ${detail}.\n` +
+        `اگر مدل برای اولین بار در حال بارگذاری است، چند لحظه بعد دوباره تلاش کنید؛ ` +
+        `اگر تکرار شد: ۱) سرویس Ollama را ری‌استارت کنید ۲) با مدل سبک‌تر (qwen3:4b) امتحان کنید (احتمال کمبود رم).`,
+    };
     return;
   }
 
-  if (!res || !res.ok || !res.body) {
+  const status = attempt.status;
+  if (status >= 400) {
     let detail = '';
     try {
-      detail = res ? (await res.text()).slice(0, 300) : '';
-    } catch { /* ignore */ }
-    yield { error: `خطای Ollama: ${res ? `HTTP ${res.status}` : 'بدون پاسخ'} ${detail}` };
+      detail = (await readAll(attempt.res)).slice(0, 300);
+    } catch {
+      /* ignore */
+    }
+    yield { error: `خطای Ollama: HTTP ${status} ${detail}` };
     return;
   }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder('utf-8', { stream: true });
-  let buffer = '';
 
   // پارسر تگ <think> به‌صورت افزایشی
   let insideThink = false;
@@ -131,46 +250,37 @@ export async function* streamOllamaChat(
   };
 
   try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        let parsed: {
-          message?: { content?: string; thinking?: string };
-          done?: boolean;
-          error?: string;
-        };
-        try {
-          parsed = JSON.parse(trimmed);
-        } catch {
-          continue;
+    for await (const line of ndjsonLines(attempt.res)) {
+      let parsed: {
+        message?: { content?: string; thinking?: string };
+        done?: boolean;
+        error?: string;
+      };
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (parsed.error) {
+        yield { error: parsed.error };
+        return;
+      }
+      // حالت ۱: فیلد thinking مستقل (Ollama جدید)
+      if (parsed.message?.thinking) {
+        yield { thinkingDelta: parsed.message.thinking };
+      }
+      const content = parsed.message?.content;
+      if (content) {
+        // حالت ۲: تگ <think> داخل content
+        yield* processDelta(content);
+      }
+      if (parsed.done) {
+        if (carry) {
+          yield insideThink ? { thinkingDelta: carry } : { contentDelta: carry };
+          carry = '';
         }
-        if (parsed.error) {
-          yield { error: parsed.error };
-          return;
-        }
-        // حالت ۱: فیلد thinking مستقل (Ollama جدید)
-        if (parsed.message?.thinking) {
-          yield { thinkingDelta: parsed.message.thinking };
-        }
-        const content = parsed.message?.content;
-        if (content) {
-          // حالت ۲: تگ <think> داخل content
-          yield* processDelta(content);
-        }
-        if (parsed.done) {
-          if (carry) {
-            yield insideThink ? { thinkingDelta: carry } : { contentDelta: carry };
-            carry = '';
-          }
-          yield { done: true };
-          return;
-        }
+        yield { done: true };
+        return;
       }
     }
     if (carry) {
@@ -178,7 +288,7 @@ export async function* streamOllamaChat(
     }
     yield { done: true };
   } catch (e) {
-    yield { error: e instanceof Error ? `قطع‌شدن جریان پاسخ: ${e.message}` : 'خطای ناشناخته در دریافت پاسخ' };
+    yield { error: `قطع‌شدن جریان پاسخ: ${describeError(e)}` };
   }
 }
 
