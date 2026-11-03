@@ -52,3 +52,13 @@ prompt
 server.log
 # Skills directory
 /skills/
+# runtime / sandbox artifacts (not for GitHub repo)
+/db
+/upload
+/download
+/examples
+/mini-services
+/tests
+/.zscripts
+/Caddyfile
+/scripts/test-*.ts
