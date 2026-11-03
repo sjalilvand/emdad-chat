@@ -68,8 +68,10 @@ $cloneUrl = if ($Token) { "https://$Token@github.com/sjalilvand/emdad-chat.git" 
 if (Test-Path (Join-Path $InstallDir ".git")) {
   git -C $InstallDir pull --ff-only | Out-Null
   Ok "مخزن موجود به‌روزرسانی شد."
-} elseif (Test-Path $InstallDir) {
-  Fail "پوشه $InstallDir وجود دارد ولی مخزن گیت نیست؛ پوشه را خالی کنید یا مسیر دیگری بدهید."
+} elseif (Test-Path (Join-Path $InstallDir "package.json")) {
+  Ok "کد از قبل در $InstallDir موجود است (نصب بدون گیت)؛ برای به‌روزرسانی، install.ps1 را دوباره اجرا کنید."
+} elseif ((Test-Path $InstallDir) -and ((Get-ChildItem $InstallDir -Force | Measure-Object).Count -gt 0)) {
+  Fail "پوشه $InstallDir وجود دارد ولی کد پروژه در آن نیست؛ پوشه را خالی کنید یا مسیر دیگری بدهید."
 } else {
   git clone $cloneUrl $InstallDir
   if ($LASTEXITCODE -ne 0) { Fail "دریافت مخزن ناموفق بود (توکن/شبکه را بررسی کنید)." }

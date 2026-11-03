@@ -19,11 +19,14 @@
 
 ## اجرای سریع روی سرور ویندوز (PowerShell)
 
-پیش‌نیاز: Node.js 20+ ، Git ، Ollama با مدل‌های دانلودشده.
+پیش‌نیاز: Node.js 20+ و Ollama با مدل‌های دانلودشده (گیت هم داشته باشید بهتر است؛ نبود خودکار از ZIP استفاده می‌شود).
+
+سه خط زیر را در PowerShell اجرا کنید (مسیر فعلی مهم نیست) — کد را در `C:\emdad-chat` قرار می‌دهد و همه مراحل نصب و اجرا را خودکار انجام می‌دهد:
 
 ```powershell
-# نصب کامل و اجرا (بار اول و هر بار به‌روزرسانی)
-powershell -ExecutionPolicy Bypass -File deploy\setup-server.ps1
+[Net.ServicePointManager]::SecurityProtocol = 'Tls12'
+Invoke-WebRequest "https://raw.githubusercontent.com/sjalilvand/emdad-chat/main/install.ps1" -OutFile "$env:TEMP\install-emdad.ps1" -UseBasicParsing
+powershell -ExecutionPolicy Bypass -File "$env:TEMP\install-emdad.ps1"
 ```
 
 سپس مرورگر: **http://130.185.73.157:8094**
